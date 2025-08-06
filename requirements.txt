@@ -2,3 +2,4 @@ flask
 sentence-transformers
 faiss-cpu
 requests
+pymilvus
