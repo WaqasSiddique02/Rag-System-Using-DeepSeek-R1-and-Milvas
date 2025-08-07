@@ -3,3 +3,6 @@ sentence-transformers
 faiss-cpu
 requests
 pymilvus
+datasets
+torch
+transformers

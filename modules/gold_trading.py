@@ -4,6 +4,7 @@ import requests
 import numpy as np
 from milvus_client import check_existing_documents, insert_documents
 
+
 def initialize_gold_documents(collection, embedder):
     """
     Initialize gold trading documents and insert only if not already in Milvus.
@@ -24,7 +25,7 @@ def initialize_gold_documents(collection, embedder):
         "A troy ounce (31.103 grams) is used for gold, distinct from an avoirdupois ounce (28.35 grams).",
         "The chain of integrity ensures LBMA bullion bars are trusted without re-assaying, maintaining a traceable custody chain.",
         "Futures are contracts to buy/sell gold at a future date, while CFDs allow speculation without physical delivery.",
-        "The bid price is what a dealer pays for gold, and the ask price is what they sell it for; the spread is the difference."
+        "The bid price is what a dealer pays for gold, and the ask price is what they sell it for; the spread is the difference.",
     ]
 
     # Check for existing documents
@@ -37,6 +38,7 @@ def initialize_gold_documents(collection, embedder):
 
     return documents
 
+
 def fetch_gold_data(alpha_vantage_key, newsapi_key):
     """
     Fetch real-time gold price and news.
@@ -47,9 +49,11 @@ def fetch_gold_data(alpha_vantage_key, newsapi_key):
         api_url = f"https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=XAU&to_currency=USD&apikey={alpha_vantage_key}"
         api_response = requests.get(api_url).json()
         quote = api_response.get("Realtime Currency Exchange Rate", {})
-        gold_data = (f"Latest gold price (XAU/USD): ${quote.get('5. Exchange Rate', 'N/A')} "
-                     f"as of {quote.get('6. Last Refreshed', 'N/A')} "
-                     f"(Bid: {quote.get('8. Bid Price', 'N/A')}, Ask: {quote.get('9. Ask Price', 'N/A')})")
+        gold_data = (
+            f"Latest gold price (XAU/USD): ${quote.get('5. Exchange Rate', 'N/A')} "
+            f"as of {quote.get('6. Last Refreshed', 'N/A')} "
+            f"(Bid: {quote.get('8. Bid Price', 'N/A')}, Ask: {quote.get('9. Ask Price', 'N/A')})"
+        )
     except Exception as e:
         gold_data = f"Failed to fetch gold price: {str(e)}"
 
@@ -58,11 +62,17 @@ def fetch_gold_data(alpha_vantage_key, newsapi_key):
         news_url = f"https://newsapi.org/v2/everything?q=gold+market&sortBy=publishedAt&apiKey={newsapi_key}"
         news_response = requests.get(news_url).json()
         articles = news_response.get("articles", [])[:3]
-        news_data = "\n".join([f"News: {article['title']} ({article['publishedAt']})" for article in articles])
+        news_data = "\n".join(
+            [
+                f"News: {article['title']} ({article['publishedAt']})"
+                for article in articles
+            ]
+        )
     except Exception as e:
         news_data = f"Failed to fetch gold news: {str(e)}"
 
     return gold_data, news_data
+
 
 def get_gold_prompt(question, retrieved_docs, gold_data, news_data):
     """
@@ -82,4 +92,30 @@ Response format:
 </Thinking>
 <Answer>
 [Your final answer here]
+</Answer>"""
+
+def get_trading_prompt(question, retrieved_docs, market_data):
+    """
+    Generate prompt for crypto/stock trading queries
+    """
+    context = "\n".join(retrieved_docs + [market_data])
+    
+    return f"""You are a professional trading assistant specializing in cryptocurrencies and stocks. 
+Analyze the following information and provide a detailed response with step-by-step reasoning.
+Consider technical indicators, market trends, and risk factors.
+
+Context:
+{context}
+
+Question: {question}
+
+Required Response Format:
+<Thinking>
+[Your detailed analysis process]
+[Consideration of relevant indicators]
+[Evaluation of potential risks]
+</Thinking>
+<Answer>
+[Clear, actionable conclusion]
+[Optional: Suggested next steps or additional analysis needed]
 </Answer>"""
