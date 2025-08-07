@@ -48,14 +48,20 @@ def query():
     query_embedding = embedder.encode([question])[0]
     retrieved_docs = search(collection, query_embedding, TOP_K)
     context = "\n".join(retrieved_docs)
-    prompt = f"""Use the following context to answer the question.
+    prompt = f"""Use the following context to answer the question.First, provide a step-by-step reasoning process to explain how you arrive at the answer. Clearly label this section as 'Thinking'. Then, provide the final answer in a separate section labeled 'Answer'.
 
 Context:
 {context}
 
 Question: {question}
 
-Answer:"""
+Response format:
+<Thinking>
+[Your step-by-step reasoning here]
+</Thinking>
+<Answer>
+[Your final answer here]
+</Answer>"""
 
     try:
         response = requests.post(
@@ -64,8 +70,25 @@ Answer:"""
         )
         response.raise_for_status()
         result = response.json()
+        raw_response = result.get("response", "")
+
+        # Parse the response to extract thinking and answer
+        thinking_start = raw_response.find("<Thinking>")
+        thinking_end = raw_response.find("</Thinking>")
+        answer_start = raw_response.find("<Answer>")
+        answer_end = raw_response.find("</Answer>")
+
+        if thinking_start != -1 and thinking_end != -1 and answer_start != -1 and answer_end != -1:
+            thinking = raw_response[thinking_start + len("<Thinking>"):thinking_end].strip()
+            answer = raw_response[answer_start + len("<Answer>"):answer_end].strip()
+        else:
+            # Fallback if the model doesn't follow the exact format
+            thinking = "The model did not provide a clear thinking process."
+            answer = raw_response
+
         return jsonify({
-            "answer": result.get("response", ""),
+            "answer": answer,
+            "thinking": thinking,
             "context": retrieved_docs
         })
     except Exception as e:
