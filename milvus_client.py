@@ -1,3 +1,4 @@
+
 import os
 from pymilvus import connections, Collection, CollectionSchema, FieldSchema, DataType, utility
 from dotenv import load_dotenv
@@ -54,16 +55,14 @@ def get_or_create_collection(dim):
 def check_existing_documents(collection, texts):
     try:
         collection.load()
-        # Query all texts in the collection
         query_result = collection.query(expr="id > 0", output_fields=["text"])
         existing_texts = [item["text"] for item in query_result]
-        # Return texts that don't exist in the collection
         new_texts = [text for text in texts if text not in existing_texts]
         print(f"Found {len(existing_texts)} existing documents, {len(new_texts)} new documents to insert")
         return new_texts
     except Exception as e:
         print(f"Failed to check existing documents: {str(e)}")
-        return texts  # If query fails, assume all texts need insertion
+        return texts
 
 def insert_documents(collection, texts, embeddings):
     if not texts or not embeddings:
@@ -91,7 +90,7 @@ def search(collection, query_embedding, top_k):
             output_fields=["text"]
         )
         hits = results[0]
-        retrieved = list(dict.fromkeys([hit.entity.get("text") for hit in hits]))  # Remove duplicates
+        retrieved = list(dict.fromkeys([hit.entity.get("text") for hit in hits]))
         print(f"Retrieved {len(retrieved)} unique documents")
         return retrieved
     except Exception as e:
