@@ -21,8 +21,7 @@ documents = [
     "Retrieval-Augmented Generation (RAG) combines document retrieval with language generation.",
     "Milvus is a scalable vector database designed for similarity search.",
     "Ollama allows running large language models locally via an API.",
-    "Sentence Transformers convert text into embeddings for semantic search.",
-    "Awais is a good guy."
+    "Sentence Transformers convert text into embeddings for semantic search."
 ]
 
 # Embedding model
@@ -48,7 +47,6 @@ def query():
 
     query_embedding = embedder.encode([question])[0]
     retrieved_docs = search(collection, query_embedding, TOP_K)
-
     context = "\n".join(retrieved_docs)
     prompt = f"""Use the following context to answer the question.
 
