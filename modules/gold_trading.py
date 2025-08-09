@@ -1,4 +1,3 @@
-# File: gold_trading_chatbot/modules/gold_trading.py
 from sentence_transformers import SentenceTransformer
 import requests
 import numpy as np
@@ -16,7 +15,7 @@ def initialize_gold_documents(collection, embedder):
         "Bullion coins (e.g., Canadian Maple Leaf, American Buffalo) are valued by their gold content, with a premium of 5-15% over the spot price.",
         "Numismatic coins are valued for rarity or historical significance, not just gold content, unlike bullion coins.",
         "Arbitrage is buying and selling gold in different markets to profit from price differences (e.g., USD vs. GBP).",
-        "An assay tests gold’s purity and weight, using methods like Fire Assay or X-Ray Fluorescence (XRF).",
+        "An assay tests golds purity and weight, using methods like Fire Assay or X-Ray Fluorescence (XRF).",
         "Gold ETFs (e.g., SPDR Gold Shares, GLD) track gold prices without physical ownership, but carry risks like management fees.",
         "XAU/USD is the forex pair for one troy ounce of gold in US dollars, used in spot trading.",
         "Gold prices rise during inflation or geopolitical uncertainty (safe haven) and fall with high interest rates or a strong USD.",

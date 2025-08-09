@@ -1,4 +1,3 @@
-# File: gold_trading_chatbot/app.py
 from flask import Flask, request, jsonify
 from sentence_transformers import SentenceTransformer
 import requests
