@@ -2,8 +2,9 @@ from flask import Flask, request, jsonify
 from sentence_transformers import SentenceTransformer
 import requests
 import numpy as np
+from market_data import fetch_market_data
 from milvus_client import connect_to_milvus, get_or_create_collection, search
-from modules.gold_trading import initialize_gold_documents, fetch_gold_data, get_gold_prompt
+from modules.gold_trading import get_trading_prompt, initialize_gold_documents, fetch_gold_data, get_gold_prompt
 from dotenv import load_dotenv
 import os
 
@@ -12,7 +13,7 @@ load_dotenv()
 ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
 NEWSAPI_API_KEY = os.getenv("NEWSAPI_API_KEY")
 OLLAMA_URL = "http://localhost:11435/api/generate"
-MODEL_NAME = "deepseek-r1:1.5b"
+MODEL_NAME = "crypto-trader"
 TOP_K = 3
 
 # Initialize Milvus and SentenceTransformer
@@ -31,18 +32,27 @@ def query():
     if not question:
         return jsonify({"error": "Missing 'question'"}), 400
 
-    # Check if the query is related to gold trading
+    # Determine query type
+    is_trading_query = any(term in question.lower() for term in 
+                        ['bitcoin', 'crypto', 'stock', 'trade', 'market', 'price', 'btc', 'eth'])
     is_gold_query = "gold" in question.lower() or "xau" in question.lower() or "bullion" in question.lower()
 
-    if is_gold_query:
+    if is_trading_query:
+        # Fetch crypto/stock data
+        market_data = fetch_market_data()
+        query_embedding = embedder.encode([question])[0]
+        retrieved_docs = search(collection, query_embedding, TOP_K)
+        prompt = get_trading_prompt(question, retrieved_docs, market_data)
+    elif is_gold_query:
         # Fetch gold-specific data
         gold_data, news_data = fetch_gold_data(ALPHA_VANTAGE_API_KEY, NEWSAPI_API_KEY)
         query_embedding = embedder.encode([question])[0]
         retrieved_docs = search(collection, query_embedding, TOP_K)
         prompt = get_gold_prompt(question, retrieved_docs, gold_data, news_data)
     else:
-        # Fallback for non-gold queries (your partner can extend this)
-        retrieved_docs = search(collection, embedder.encode([question])[0], TOP_K)
+        # Fallback for other queries
+        query_embedding = embedder.encode([question])[0]
+        retrieved_docs = search(collection, query_embedding, TOP_K)
         context = "\n".join(retrieved_docs)
         prompt = f"""Use the following context to answer the question. Provide a step-by-step reasoning process labeled 'Thinking,' followed by the final answer labeled 'Answer'.
 
@@ -80,11 +90,19 @@ Response format:
             thinking = "The model did not provide a clear thinking process."
             answer = raw_response
 
-        return jsonify({
+        response_data = {
             "answer": answer,
             "thinking": thinking,
-            "context": retrieved_docs + ([gold_data, news_data] if is_gold_query else [])
-        })
+            "context": retrieved_docs
+        }
+
+        if is_gold_query:
+            response_data["gold_data"] = gold_data
+            response_data["news_data"] = news_data
+        elif is_trading_query:
+            response_data["market_data"] = market_data
+
+        return jsonify(response_data)
     except Exception as e:
         return jsonify({"error": "Failed to get valid response", "details": str(e)}), 500
 
