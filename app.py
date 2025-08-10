@@ -31,22 +31,28 @@ def query():
 
     # Determine query type
     is_trading_query = any(term in question.lower() for term in 
-                        ['bitcoin', 'crypto', 'stock', 'trade', 'market', 'price', 'btc', 'eth'])
+        ['bitcoin', 'crypto', 'stock', 'trade', 'market', 'price', 'btc', 'eth']
+    )
 
+    # Always fetch embeddings and retrieved docs
+    query_embedding = embedder.encode([question])[0]
+    retrieved_docs = search(collection, query_embedding, TOP_K)
+    context = "\n".join(retrieved_docs)
+
+    # Trading-specific logic
+    market_data = None
     if is_trading_query:
-        # Fetch crypto/stock data
         market_data = fetch_market_data()
-        query_embedding = embedder.encode([question])[0]
-        retrieved_docs = search(collection, query_embedding, TOP_K)
-    else:
-        # Fallback for other queries
-        query_embedding = embedder.encode([question])[0]
-        retrieved_docs = search(collection, query_embedding, TOP_K)
-        context = "\n".join(retrieved_docs)
-        prompt = f"""Use the following context to answer the question. Provide a step-by-step reasoning process labeled 'Thinking,' followed by the final answer labeled 'Answer'.
+
+    # Always create a prompt
+    prompt = f"""Use the following context{" and market data" if is_trading_query else ""} 
+to answer the question. Provide a step-by-step reasoning process labeled 'Thinking,' 
+followed by the final answer labeled 'Answer'.
 
 Context:
 {context}
+
+{"Market Data:\n" + str(market_data) if market_data else ""}
 
 Question: {question}
 
@@ -67,13 +73,14 @@ Response format:
         result = response.json()
         raw_response = result.get("response", "")
 
-        thinking_start = raw_response.find("<Thinking>")
-        thinking_end = raw_response.find("</Thinking>")
+        # thinking_start = raw_response.find("<Thinking>")
+        # thinking_end = raw_response.find("</Thinking>")
         answer_start = raw_response.find("<Answer>")
         answer_end = raw_response.find("</Answer>")
 
-        if thinking_start != -1 and thinking_end != -1 and answer_start != -1 and answer_end != -1:
-            thinking = raw_response[thinking_start + len("<Thinking>"):thinking_end].strip()
+        # thinking_start != -1 and thinking_end != -1 and
+        if  answer_start != -1 and answer_end != -1:
+            # thinking = raw_response[thinking_start + len("<Thinking>"):thinking_end].strip()
             answer = raw_response[answer_start + len("<Answer>"):answer_end].strip()
         else:
             thinking = "The model did not provide a clear thinking process."
@@ -81,16 +88,17 @@ Response format:
 
         response_data = {
             "answer": answer,
-            "thinking": thinking,
+            # "thinking": thinking,
             "context": retrieved_docs
         }
 
-        if is_trading_query:
+        if market_data:
             response_data["market_data"] = market_data
 
         return jsonify(response_data)
     except Exception as e:
         return jsonify({"error": "Failed to get valid response", "details": str(e)}), 500
+
 
 @app.route("/health", methods=["GET"])
 def health():
