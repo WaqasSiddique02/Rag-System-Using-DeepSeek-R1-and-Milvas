@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 from sentence_transformers import SentenceTransformer
 import requests
-from modules.market_data import fetch_market_data
+from modules.market_data import fetch_market_data_and_log
 from milvus_client import connect_to_milvus, get_or_create_collection, search
 from dotenv import load_dotenv
 import os
@@ -20,7 +20,10 @@ print("Loading SentenceTransformer...")
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
 # Initialize gold trading documents
-collection = get_or_create_collection(dim=384)  # all-MiniLM-L6-v2 produces 384-dim embeddings
+collection = get_or_create_collection(
+    dim=384
+)  # all-MiniLM-L6-v2 produces 384-dim embeddings
+
 
 @app.route("/query", methods=["POST"])
 def query():
@@ -30,8 +33,18 @@ def query():
         return jsonify({"error": "Missing 'question'"}), 400
 
     # Determine query type
-    is_trading_query = any(term in question.lower() for term in 
-        ['bitcoin', 'crypto', 'stock', 'trade', 'market', 'price', 'btc', 'eth']
+    is_trading_query = any(
+        term in question.lower()
+        for term in [
+            "bitcoin",
+            "crypto",
+            "stock",
+            "trade",
+            "market",
+            "price",
+            "btc",
+            "eth",
+        ]
     )
 
     # Always fetch embeddings and retrieved docs
@@ -42,7 +55,7 @@ def query():
     # Trading-specific logic
     market_data = None
     if is_trading_query:
-        market_data = fetch_market_data()
+        market_data = fetch_market_data_and_log(collection)
 
     # Always create a prompt
     prompt = f"""Use the following context{" and market data" if is_trading_query else ""} 
@@ -79,9 +92,9 @@ Response format:
         answer_end = raw_response.find("</Answer>")
 
         # thinking_start != -1 and thinking_end != -1 and
-        if  answer_start != -1 and answer_end != -1:
+        if answer_start != -1 and answer_end != -1:
             # thinking = raw_response[thinking_start + len("<Thinking>"):thinking_end].strip()
-            answer = raw_response[answer_start + len("<Answer>"):answer_end].strip()
+            answer = raw_response[answer_start + len("<Answer>") : answer_end].strip()
         else:
             thinking = "The model did not provide a clear thinking process."
             answer = raw_response
@@ -89,7 +102,7 @@ Response format:
         response_data = {
             "answer": answer,
             # "thinking": thinking,
-            "context": retrieved_docs
+            "context": retrieved_docs,
         }
 
         if market_data:
@@ -97,12 +110,16 @@ Response format:
 
         return jsonify(response_data)
     except Exception as e:
-        return jsonify({"error": "Failed to get valid response", "details": str(e)}), 500
+        return (
+            jsonify({"error": "Failed to get valid response", "details": str(e)}),
+            500,
+        )
 
 
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
