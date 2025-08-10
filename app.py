@@ -1,10 +1,8 @@
 from flask import Flask, request, jsonify
 from sentence_transformers import SentenceTransformer
 import requests
-import numpy as np
-from market_data import fetch_market_data
+from modules.market_data import fetch_market_data
 from milvus_client import connect_to_milvus, get_or_create_collection, search
-from modules.gold_trading import get_trading_prompt, initialize_gold_documents, fetch_gold_data, get_gold_prompt
 from dotenv import load_dotenv
 import os
 
@@ -13,7 +11,7 @@ load_dotenv()
 ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
 NEWSAPI_API_KEY = os.getenv("NEWSAPI_API_KEY")
 OLLAMA_URL = "http://localhost:11435/api/generate"
-MODEL_NAME = "crypto-trader"
+MODEL_NAME = "trading-model"
 TOP_K = 3
 
 # Initialize Milvus and SentenceTransformer
@@ -23,7 +21,6 @@ embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
 # Initialize gold trading documents
 collection = get_or_create_collection(dim=384)  # all-MiniLM-L6-v2 produces 384-dim embeddings
-gold_documents = initialize_gold_documents(collection, embedder)
 
 @app.route("/query", methods=["POST"])
 def query():
@@ -35,20 +32,12 @@ def query():
     # Determine query type
     is_trading_query = any(term in question.lower() for term in 
                         ['bitcoin', 'crypto', 'stock', 'trade', 'market', 'price', 'btc', 'eth'])
-    is_gold_query = "gold" in question.lower() or "xau" in question.lower() or "bullion" in question.lower()
 
     if is_trading_query:
         # Fetch crypto/stock data
         market_data = fetch_market_data()
         query_embedding = embedder.encode([question])[0]
         retrieved_docs = search(collection, query_embedding, TOP_K)
-        prompt = get_trading_prompt(question, retrieved_docs, market_data)
-    elif is_gold_query:
-        # Fetch gold-specific data
-        gold_data, news_data = fetch_gold_data(ALPHA_VANTAGE_API_KEY, NEWSAPI_API_KEY)
-        query_embedding = embedder.encode([question])[0]
-        retrieved_docs = search(collection, query_embedding, TOP_K)
-        prompt = get_gold_prompt(question, retrieved_docs, gold_data, news_data)
     else:
         # Fallback for other queries
         query_embedding = embedder.encode([question])[0]
@@ -96,10 +85,7 @@ Response format:
             "context": retrieved_docs
         }
 
-        if is_gold_query:
-            response_data["gold_data"] = gold_data
-            response_data["news_data"] = news_data
-        elif is_trading_query:
+        if is_trading_query:
             response_data["market_data"] = market_data
 
         return jsonify(response_data)
