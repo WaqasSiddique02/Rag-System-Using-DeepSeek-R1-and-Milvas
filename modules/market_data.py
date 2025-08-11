@@ -14,6 +14,7 @@ def fetch_market_data_and_log(collection):
     Fetch crypto and stock market data, save them into Milvus with timestamps,
     and return the entries for immediate use.
     """
+    
     data_entries = []
     timestamp = datetime.utcnow().isoformat()
 

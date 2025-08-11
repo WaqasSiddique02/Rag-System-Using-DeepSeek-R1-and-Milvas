@@ -4,6 +4,7 @@ import requests
 from modules.market_data import fetch_market_data_and_log
 from milvus_client import connect_to_milvus, get_or_create_collection, search
 from dotenv import load_dotenv
+from modules.binance_data import fetch_binance_data_and_log
 import os
 
 app = Flask(__name__)
@@ -13,7 +14,6 @@ NEWSAPI_API_KEY = os.getenv("NEWSAPI_API_KEY")
 OLLAMA_URL = "http://localhost:11435/api/generate"
 MODEL_NAME = "trading-model"
 TOP_K = 3
-
 # Initialize Milvus and SentenceTransformer
 connect_to_milvus()
 print("Loading SentenceTransformer...")
@@ -55,7 +55,7 @@ def query():
     # Trading-specific logic
     market_data = None
     if is_trading_query:
-        market_data = fetch_market_data_and_log(collection)
+        market_data = fetch_binance_data_and_log(collection)
 
     # Always create a prompt
     prompt = f"""Use the following context{" and market data" if is_trading_query else ""} 
