@@ -109,7 +109,6 @@ def insert_documents(collection, texts, embeddings):
 
     print(f"Inserting {len(texts)} documents...")
     try:
-        # Match schema order: id (auto_id), embedding, text
         entities = [embeddings, texts]
         # Because id is auto_id, we only pass embedding & text fields
         mr = collection.insert(entities)
