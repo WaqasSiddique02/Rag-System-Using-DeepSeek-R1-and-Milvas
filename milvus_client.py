@@ -9,6 +9,8 @@ from pymilvus import (
 )
 from dotenv import load_dotenv
 import numpy as np
+import hashlib
+
 
 load_dotenv()
 
@@ -32,6 +34,7 @@ def create_collection(dim):
         FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
         FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=dim),
         FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=1024),
+        FieldSchema(name="hash", dtype=DataType.VARCHAR, max_length=64),  # SHA-256 hash
     ]
     schema = CollectionSchema(fields, description="Gold trading documents")
     collection = Collection(name=COLLECTION_NAME, schema=schema)
@@ -50,16 +53,11 @@ def create_collection(dim):
 
 
 def validate_collection_schema(dim):
-    """Ensure collection exists and has correct fields/dimensions, else recreate."""
     if utility.has_collection(COLLECTION_NAME):
         col = Collection(name=COLLECTION_NAME)
         schema = {f.name: f for f in col.schema.fields}
-
-        # Check embedding field existence & dimension
-        if "embedding" not in schema:
-            print(
-                f"Collection '{COLLECTION_NAME}' missing 'embedding' field — recreating..."
-            )
+        if "embedding" not in schema or "text" not in schema or "hash" not in schema:  # Check hash
+            print(f"Collection '{COLLECTION_NAME}' missing required fields — recreating...")
             utility.drop_collection(COLLECTION_NAME)
             return create_collection(dim)
         elif schema["embedding"].params.get("dim", dim) != dim:
@@ -86,40 +84,39 @@ def get_or_create_collection(dim):
 def check_existing_documents(collection, texts):
     try:
         collection.load()
-        query_result = collection.query(expr="id > 0", output_fields=["text"])
-        existing_texts = [item["text"] for item in query_result]
-        new_texts = [text for text in texts if text not in existing_texts]
-        print(
-            f"Found {len(existing_texts)} existing documents, {len(new_texts)} new documents to insert"
-        )
-        return new_texts
+        new_texts = []
+        for text in texts:
+            # Compute SHA-256 hash
+            text_hash = hashlib.sha256(text.encode('utf-8')).hexdigest()
+            # Query Milvus for exact hash match
+            query_result = collection.query(expr=f'hash == "{text_hash}"', output_fields=["hash"])
+            if not query_result:  # No match found
+                new_texts.append((text, text_hash))
+        print(f"Found {len(texts) - len(new_texts)} duplicates, {len(new_texts)} new documents to insert")
+        return new_texts  # Return list of (text, hash) tuples
     except Exception as e:
         print(f"Failed to check existing documents: {str(e)}")
-        return texts
+        return [(text, hashlib.sha256(text.encode('utf-8')).hexdigest()) for text in texts]
 
 
-def insert_documents(collection, texts, embeddings):
-    if len(texts) == 0 or len(embeddings) == 0:
+def insert_documents(collection, texts_and_hashes, embeddings):
+    if not texts_and_hashes or len(embeddings) == 0:
         print("No documents to insert")
         return
 
-    # Ensure embeddings is a Python list of lists
+    texts, hashes = zip(*texts_and_hashes) if texts_and_hashes else ([], [])
     if isinstance(embeddings, np.ndarray):
         embeddings = embeddings.tolist()
 
     print(f"Inserting {len(texts)} documents...")
     try:
-        entities = [embeddings, texts]
-        # Because id is auto_id, we only pass embedding & text fields
+        entities = [embeddings, texts, hashes]  # Include hashes
         mr = collection.insert(entities)
         collection.flush()
-        print(
-            f"Inserted {mr.insert_count} documents, total entities: {collection.num_entities}"
-        )
+        print(f"Inserted {mr.insert_count} documents, total entities: {collection.num_entities}")
     except Exception as e:
         print(f"Failed to insert documents: {str(e)}")
         raise
-
 
 def search(collection, query_embedding, top_k):
     print("Searching collection...")
