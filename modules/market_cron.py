@@ -2,15 +2,21 @@ import os
 from datetime import datetime, timedelta
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
-from milvus_client import connect_to_milvus, get_or_create_collection, insert_documents, check_existing_documents
+from milvus_client import (
+    connect_to_milvus,
+    get_or_create_collection,
+    insert_documents,
+    check_existing_documents,
+)
 from sentence_transformers import SentenceTransformer
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
 SPOT_BASE = "https://api.binance.com"
 FUTURES_BASE = "https://fapi.binance.com"
-
 SYMBOLS = ["BTCUSDT", "ETHUSDT"]
+
 
 def get_json(url, params=None):
     try:
@@ -21,61 +27,96 @@ def get_json(url, params=None):
     except Exception as e:
         return {"error": str(e)}
 
+
 def fetch_binance_data(symbol):
-    """
-    Fetch Spot + Futures data for a given symbol.
-    Returns a list of text entries describing the state of the market.
-    """
-    entries = []
+    """Fetch Spot + Futures data for a given symbol in parallel."""
     timestamp = datetime.utcnow().isoformat()
+    urls = {
+        "stats": (f"{SPOT_BASE}/api/v3/ticker/24hr", {"symbol": symbol}),
+        "depth": (f"{SPOT_BASE}/api/v3/depth", {"symbol": symbol, "limit": 10}),
+        "trades": (f"{SPOT_BASE}/api/v3/trades", {"symbol": symbol, "limit": 5}),
+        "klines": (
+            f"{SPOT_BASE}/api/v3/klines",
+            {"symbol": symbol, "interval": "1m", "limit": 10},
+        ),
+        "oi": (f"{FUTURES_BASE}/fapi/v1/openInterest", {"symbol": symbol}),
+        "liquidations": (
+            f"{FUTURES_BASE}/fapi/v1/allForceOrders",
+            {"symbol": symbol, "limit": 5},
+        ),
+        "long_short": (
+            f"{FUTURES_BASE}/futures/data/topLongShortAccountRatio",
+            {"symbol": symbol, "period": "5m", "limit": 1},
+        ),
+    }
 
-    # Spot latest price & 24h stats
-    stats = get_json(f"{SPOT_BASE}/api/v3/ticker/24hr", {"symbol": symbol})
+    entries = []
+
+    # Run all Binance requests for this symbol in parallel
+    with ThreadPoolExecutor(max_workers=len(urls)) as executor:
+        futures = {
+            executor.submit(get_json, url, params): name
+            for name, (url, params) in urls.items()
+        }
+        results = {}
+        for future in as_completed(futures):
+            name = futures[future]
+            results[name] = future.result()
+
+    # Process responses
+    stats = results.get("stats", {})
     if "error" not in stats:
-        entries.append(f"[{timestamp}] {symbol} Spot Price: ${stats['lastPrice']} "
-                       f"(24h Change: {stats['priceChangePercent']}%, High: {stats['highPrice']}, Low: {stats['lowPrice']}, Volume: {stats['volume']})")
+        entries.append(
+            f"[{timestamp}] {symbol} Spot Price: ${stats['lastPrice']} "
+            f"(24h Change: {stats['priceChangePercent']}%, High: {stats['highPrice']}, Low: {stats['lowPrice']}, Volume: {stats['volume']})"
+        )
 
-    # Order book depth
-    depth = get_json(f"{SPOT_BASE}/api/v3/depth", {"symbol": symbol, "limit": 10})
+    depth = results.get("depth", {})
     if "error" not in depth:
-        best_bid = depth['bids'][0][0] if depth['bids'] else 'N/A'
-        best_ask = depth['asks'][0][0] if depth['asks'] else 'N/A'
-        entries.append(f"[{timestamp}] {symbol} Order Book: Best Bid ${best_bid}, Best Ask ${best_ask}")
+        best_bid = depth["bids"][0][0] if depth["bids"] else "N/A"
+        best_ask = depth["asks"][0][0] if depth["asks"] else "N/A"
+        entries.append(
+            f"[{timestamp}] {symbol} Order Book: Best Bid ${best_bid}, Best Ask ${best_ask}"
+        )
 
-    # Recent trades
-    trades = get_json(f"{SPOT_BASE}/api/v3/trades", {"symbol": symbol, "limit": 5})
+    trades = results.get("trades", {})
     if "error" not in trades:
         total_qty = sum(float(t["qty"]) for t in trades)
-        entries.append(f"[{timestamp}] {symbol} Recent Trades: {len(trades)} trades, total qty {total_qty}")
+        entries.append(
+            f"[{timestamp}] {symbol} Recent Trades: {len(trades)} trades, total qty {total_qty}"
+        )
 
-    # Historical candlesticks (10 min window to detect moves)
-    now = datetime.utcnow()
-    klines = get_json(f"{SPOT_BASE}/api/v3/klines", {"symbol": symbol, "interval": "1m", "limit": 10})
-    if "error" not in klines:
+    klines = results.get("klines", {})
+    if "error" not in klines and len(klines) >= 2:
         start_price = float(klines[0][1])
         end_price = float(klines[-1][4])
         change_pct = ((end_price - start_price) / start_price) * 100
-        entries.append(f"[{timestamp}] {symbol} Last 10 min: Start ${start_price}, End ${end_price}, Change {change_pct:.2f}%")
+        entries.append(
+            f"[{timestamp}] {symbol} Last 10 min: Start ${start_price}, End ${end_price}, Change {change_pct:.2f}%"
+        )
 
-    # Futures open interest
-    oi = get_json(f"{FUTURES_BASE}/fapi/v1/openInterest", {"symbol": symbol})
+    oi = results.get("oi", {})
     if "error" not in oi:
-        entries.append(f"[{timestamp}] {symbol} Futures Open Interest: {oi['openInterest']} contracts")
+        entries.append(
+            f"[{timestamp}] {symbol} Futures Open Interest: {oi['openInterest']} contracts"
+        )
 
-    # Futures liquidation orders (last few mins)
-    liquidations = get_json(f"{FUTURES_BASE}/fapi/v1/allForceOrders", {"symbol": symbol, "limit": 5})
+    liquidations = results.get("liquidations", {})
     if "error" not in liquidations:
-        entries.append(f"[{timestamp}] {symbol} Recent Liquidations: {len(liquidations)} orders")
+        entries.append(
+            f"[{timestamp}] {symbol} Recent Liquidations: {len(liquidations)} orders"
+        )
 
-    # Futures long/short ratio (top traders)
-    long_short = get_json(f"{FUTURES_BASE}/futures/data/topLongShortAccountRatio", {"symbol": symbol, "period": "5m", "limit": 1})
+    long_short = results.get("long_short", [])
     if isinstance(long_short, list) and long_short:
         ratio = long_short[0]["longAccount"] + ":" + long_short[0]["shortAccount"]
         entries.append(f"[{timestamp}] {symbol} Long/Short Account Ratio (5m): {ratio}")
 
     return entries
 
+
 def market_analysis_job():
+    """Run market data collection for all symbols in parallel."""
     try:
         print(f"[{datetime.utcnow().isoformat()}] Starting market data job...")
         connect_to_milvus()
@@ -84,14 +125,23 @@ def market_analysis_job():
         collection = get_or_create_collection(dim)
 
         all_entries = []
-        for symbol in SYMBOLS:
-            all_entries.extend(fetch_binance_data(symbol))
+
+        # Fetch data for all symbols in parallel
+        with ThreadPoolExecutor(max_workers=len(SYMBOLS)) as executor:
+            futures = {
+                executor.submit(fetch_binance_data, symbol): symbol
+                for symbol in SYMBOLS
+            }
+            for future in as_completed(futures):
+                all_entries.extend(future.result())
 
         # Remove already stored entries
         new_entries = check_existing_documents(collection, all_entries)
 
         if new_entries:
-            embeddings = embedder.encode(new_entries)
+            embeddings = embedder.encode(
+                new_entries, batch_size=32, show_progress_bar=False
+            )
             insert_documents(collection, new_entries, embeddings)
             print(f"Inserted {len(new_entries)} new entries.")
         else:
@@ -105,9 +155,10 @@ def market_analysis_job():
 
 def start_scheduler():
     scheduler = BackgroundScheduler()
-    scheduler.add_job(market_analysis_job, 'interval', minutes=15, id='market_analysis')
+    scheduler.add_job(market_analysis_job, "interval", minutes=15, id="market_analysis")
     scheduler.start()
     print("Market analysis scheduler started (runs every 15 minutes).")
+
 
 if __name__ == "__main__":
     start_scheduler()
