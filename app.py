@@ -8,7 +8,7 @@ from modules.market_cron import market_analysis_job, start_scheduler
 
 app = Flask(__name__)
 load_dotenv()
-OLLAMA_URL = "http://localhost:11435/api/generate"
+OLLAMA_URL = os.getenv("OLLAMA_URL")
 MODEL_NAME = "trading-model"
 TOP_K = 3
 # Initialize Milvus and SentenceTransformer
