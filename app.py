@@ -1,11 +1,12 @@
 from flask import Flask, request, jsonify
 from sentence_transformers import SentenceTransformer
 import requests
-from modules.market_data import fetch_market_data_and_log
+# from modules.market_data import fetch_market_data_and_log
 from milvus_client import connect_to_milvus, get_or_create_collection, search
 from dotenv import load_dotenv
 from modules.binance_data import fetch_binance_data_and_log
 import os
+from modules.market_cron import market_analysis_job, start_scheduler
 
 app = Flask(__name__)
 load_dotenv()
@@ -19,6 +20,8 @@ connect_to_milvus()
 print("Loading SentenceTransformer...")
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
+start_scheduler()
+market_analysis_job()
 # Initialize gold trading documents
 collection = get_or_create_collection(
     dim=384
@@ -54,8 +57,8 @@ def query():
 
     # Trading-specific logic
     market_data = None
-    if is_trading_query:
-        market_data = fetch_binance_data_and_log(collection)
+    # if is_trading_query:
+    #     market_data = fetch_market_data_and_log(collection)
 
     # Always create a prompt
     prompt = f"""Use the following context{" and market data" if is_trading_query else ""} 

@@ -6,3 +6,4 @@ pymilvus
 datasets
 torch
 transformers
+apscheduler
