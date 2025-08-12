@@ -116,7 +116,6 @@ def fetch_binance_data(symbol):
 
 
 def market_analysis_job():
-    """Run market data collection for all symbols in parallel."""
     try:
         print(f"[{datetime.utcnow().isoformat()}] Starting market data job...")
         connect_to_milvus()
@@ -125,32 +124,23 @@ def market_analysis_job():
         collection = get_or_create_collection(dim)
 
         all_entries = []
+        for symbol in SYMBOLS:
+            all_entries.extend(fetch_binance_data(symbol))
 
-        # Fetch data for all symbols in parallel
-        with ThreadPoolExecutor(max_workers=len(SYMBOLS)) as executor:
-            futures = {
-                executor.submit(fetch_binance_data, symbol): symbol
-                for symbol in SYMBOLS
-            }
-            for future in as_completed(futures):
-                all_entries.extend(future.result())
-
-        # Remove already stored entries
-        new_entries = check_existing_documents(collection, all_entries)
-
-        if new_entries:
-            embeddings = embedder.encode(
-                new_entries, batch_size=32, show_progress_bar=False
-            )
-            insert_documents(collection, new_entries, embeddings)
+        # Check for duplicates
+        new_entries_with_hashes = check_existing_documents(collection, all_entries)
+        if new_entries_with_hashes:
+            new_entries, _ = zip(*new_entries_with_hashes) if new_entries_with_hashes else ([], [])
+            embeddings = embedder.encode(new_entries)
+            insert_documents(collection, new_entries_with_hashes, embeddings)
             print(f"Inserted {len(new_entries)} new entries.")
         else:
             print("No new entries to insert.")
 
         print(f"[{datetime.utcnow().isoformat()}] Market data job complete.")
-
     except Exception as e:
         print(f"Job failed: {str(e)}")
+        
 
 
 def start_scheduler():
