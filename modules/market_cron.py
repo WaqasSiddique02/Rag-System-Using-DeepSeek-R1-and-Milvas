@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 from milvus_client import (
@@ -11,7 +11,9 @@ from milvus_client import (
 from sentence_transformers import SentenceTransformer
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-embedder = SentenceTransformer("all-MiniLM-L6-v2")
+# Shared embedder instance
+print("[market_cron] Loading SentenceTransformer model...")
+shared_embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
 SPOT_BASE = "https://api.binance.com"
 FUTURES_BASE = "https://fapi.binance.com"
@@ -51,19 +53,17 @@ def fetch_binance_data(symbol):
     }
 
     entries = []
-
-    # Run all Binance requests for this symbol in parallel
     with ThreadPoolExecutor(max_workers=len(urls)) as executor:
         futures = {
             executor.submit(get_json, url, params): name
             for name, (url, params) in urls.items()
         }
-        results = {}
-        for future in as_completed(futures):
-            name = futures[future]
-            results[name] = future.result()
+        results = {
+            name: future.result()
+            for future, name in ((f, futures[f]) for f in as_completed(futures))
+        }
 
-    # Process responses
+    # Spot stats
     stats = results.get("stats", {})
     if "error" not in stats:
         entries.append(
@@ -71,14 +71,16 @@ def fetch_binance_data(symbol):
             f"(24h Change: {stats['priceChangePercent']}%, High: {stats['highPrice']}, Low: {stats['lowPrice']}, Volume: {stats['volume']})"
         )
 
+    # Depth
     depth = results.get("depth", {})
     if "error" not in depth:
-        best_bid = depth["bids"][0][0] if depth["bids"] else "N/A"
-        best_ask = depth["asks"][0][0] if depth["asks"] else "N/A"
+        best_bid = depth["bids"][0][0] if depth.get("bids") else "N/A"
+        best_ask = depth["asks"][0][0] if depth.get("asks") else "N/A"
         entries.append(
             f"[{timestamp}] {symbol} Order Book: Best Bid ${best_bid}, Best Ask ${best_ask}"
         )
 
+    # Trades
     trades = results.get("trades", {})
     if "error" not in trades:
         total_qty = sum(float(t["qty"]) for t in trades)
@@ -86,6 +88,7 @@ def fetch_binance_data(symbol):
             f"[{timestamp}] {symbol} Recent Trades: {len(trades)} trades, total qty {total_qty}"
         )
 
+    # Klines
     klines = results.get("klines", {})
     if "error" not in klines and len(klines) >= 2:
         start_price = float(klines[0][1])
@@ -95,21 +98,24 @@ def fetch_binance_data(symbol):
             f"[{timestamp}] {symbol} Last 10 min: Start ${start_price}, End ${end_price}, Change {change_pct:.2f}%"
         )
 
+    # Open Interest
     oi = results.get("oi", {})
     if "error" not in oi:
         entries.append(
             f"[{timestamp}] {symbol} Futures Open Interest: {oi['openInterest']} contracts"
         )
 
+    # Liquidations
     liquidations = results.get("liquidations", {})
     if "error" not in liquidations:
         entries.append(
             f"[{timestamp}] {symbol} Recent Liquidations: {len(liquidations)} orders"
         )
 
+    # Long/Short Ratio
     long_short = results.get("long_short", [])
     if isinstance(long_short, list) and long_short:
-        ratio = long_short[0]["longAccount"] + ":" + long_short[0]["shortAccount"]
+        ratio = f"{long_short[0]['longAccount']}:{long_short[0]['shortAccount']}"
         entries.append(f"[{timestamp}] {symbol} Long/Short Account Ratio (5m): {ratio}")
 
     return entries
@@ -120,40 +126,39 @@ def market_analysis_job():
         print(f"[{datetime.utcnow().isoformat()}] Starting market data job...")
         connect_to_milvus()
 
-        dim = embedder.get_sentence_embedding_dimension()
+        dim = shared_embedder.get_sentence_embedding_dimension()
         collection = get_or_create_collection(dim)
 
         all_entries = []
         for symbol in SYMBOLS:
             all_entries.extend(fetch_binance_data(symbol))
 
-        # Check for duplicates
-        new_entries_with_hashes = check_existing_documents(collection, all_entries)
-        if new_entries_with_hashes:
-            new_entries, _ = zip(*new_entries_with_hashes) if new_entries_with_hashes else ([], [])
-            embeddings = embedder.encode(new_entries)
-            insert_documents(collection, new_entries_with_hashes, embeddings)
-            print(f"Inserted {len(new_entries)} new entries.")
+        # Check for duplicates in Milvus
+        new_entries = check_existing_documents(collection, all_entries)
+        if new_entries:
+            embeddings = shared_embedder.encode(new_entries)
+            insert_documents(collection, new_entries, embeddings)
+            print(f"[market_cron] Inserted {len(new_entries)} new entries.")
         else:
-            print("No new entries to insert.")
+            print("[market_cron] No new entries to insert.")
 
         print(f"[{datetime.utcnow().isoformat()}] Market data job complete.")
     except Exception as e:
-        print(f"Job failed: {str(e)}")
-        
+        print(f"[market_cron] Job failed: {str(e)}")
+
+
+# Prevent multiple scheduler starts in debug mode
+_scheduler = BackgroundScheduler()
 
 
 def start_scheduler():
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(market_analysis_job, "interval", minutes=15, id="market_analysis")
-    scheduler.start()
-    print("Market analysis scheduler started (runs every 15 minutes).")
-
-
-if __name__ == "__main__":
-    start_scheduler()
-    try:
-        while True:
-            pass
-    except (KeyboardInterrupt, SystemExit):
-        print("Scheduler stopped.")
+    if not _scheduler.get_jobs():
+        _scheduler.add_job(
+            market_analysis_job,
+            "interval",
+            minutes=15,
+            id="market_analysis",
+            replace_existing=True,
+        )
+        _scheduler.start()
+        print("[market_cron] Scheduler started (runs every 15 minutes).")
